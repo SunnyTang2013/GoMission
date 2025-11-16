@@ -1,5 +1,5 @@
 public class DriverManager {
-    
+
     private static void processMessage(String messageStr) {
         String errorMessage = "";
         Map<String, String> carrier = null;
@@ -12,7 +12,7 @@ public class DriverManager {
             String carrierString = msgs[3];
             carrier = extractCarrierFromString(carrierString);
         }
-        
+
         if (msgs.length > 3) {
             String[] errorMessages = Arrays.copyOfRange(msgs, from: 2, msgs.length);
             errorMessage = String.join(delimiter: ":", errorMessages);
@@ -56,8 +56,8 @@ public class DriverManager {
                     log.warn("connecting and subscribe");
                     // Create stream group if not exists
                     RStream<byte[], byte[]> stream = redissonClient.getStream(REDIS_TASK_STREAM, ByteArrayCodec.INSTANCE);
-                    stream.createGroup(§"gofish", StreamMessageId.NEWEST);
-                } catch (RedisBusyException e) {
+                    stream.createGroup("gofish", StreamMessageId.NEWEST);
+                } catch (Exception e) {
                     log.warn("Redis stream consumer group already exist");
                 }
 
@@ -68,38 +68,42 @@ public class DriverManager {
                 // Keep reading messages from the stream
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
-                        // Read messages from stream with consumer group
-                        Map<StreamMessageId, Map<String, String>> messages = engineStream.readGroup(
-                            "gofish", 
-                            consumerName,
-                            StreamMessageId.NEVER_DELIVERED,
-                            5,  // batch size
-                            5000,  // timeout 5 seconds
-                            TimeUnit.MILLISECONDS
+                        // Read messages from stream with consumer group (current Redisson API)
+                        Map<String, Map<StreamMessageId, Map<String, String>>> messages = engineStream.readGroup(
+                                "gofish",
+                                consumerName,
+                                StreamMultiReadGroupArgs.greaterThan(StreamMessageId.NEVER_DELIVERED)
+                                        .count(5)
+                                        .timeout(Duration.ofSeconds(5))
                         );
-                        
+
                         if (messages != null && !messages.isEmpty()) {
-                            for (Map.Entry<StreamMessageId, Map<String, String>> entry : messages.entrySet()) {
-                                StreamMessageId messageId = entry.getKey();
-                                Map<String, String> messageData = entry.getValue();
-                                
-                                // Extract message content from stream
-                                String messageContent = messageData.get("message");
-                                if (messageContent != null) {
-                                    // Process message directly without MessageListener
-                                    processMessage(messageContent);
-                                    
-                                    // Acknowledge the message
-                                    engineStream.ack("gofish", messageId);
+                            // New API returns Map<String, Map<StreamMessageId, Map<String, String>>>
+                            for (Map.Entry<String, Map<StreamMessageId, Map<String, String>>> streamEntry : messages.entrySet()) {
+                                Map<StreamMessageId, Map<String, String>> streamMessages = streamEntry.getValue();
+
+                                for (Map.Entry<StreamMessageId, Map<String, String>> entry : streamMessages.entrySet()) {
+                                    StreamMessageId messageId = entry.getKey();
+                                    Map<String, String> messageData = entry.getValue();
+
+                                    // Extract message content from stream
+                                    String messageContent = messageData.get("message");
+                                    if (messageContent != null) {
+                                        // Process message directly without MessageListener
+                                        processMessage(messageContent);
+
+                                        // Acknowledge the message
+                                        engineStream.ack("gofish", messageId);
+                                    }
                                 }
                             }
                         }
-                        
+
                         // Check if client is still connected
                         if (redissonClient.isShutdown()) {
                             throw new RuntimeException("Redisson client is shutdown");
                         }
-                        
+
                     } catch (Exception e) {
                         log.error("Error reading from stream", e);
                         Thread.sleep(1000); // Wait before retry
