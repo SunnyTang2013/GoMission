@@ -69,10 +69,10 @@ public class DriverManager {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         // Read messages from stream with consumer group (current Redisson API)
-                        StreamMultiReadGroupArgs args = new StreamMultiReadGroupArgs();
-                        args.count(5);
-                        args.timeout(Duration.ofSeconds(5));
-                        args.stream(REDIS_ENGINE_CHANNEL, StreamMessageId.NEVER_DELIVERED);
+                        StreamMultiReadGroupArgs args = StreamMultiReadGroupArgs.StreamIds(
+                                Collections.singletonMap(REDIS_ENGINE_CHANNEL, StreamMessageId.NEVER_DELIVERED))
+                                .count(5)
+                                .timeout(Duration.ofSeconds(5));
 
                         Map<String, Map<StreamMessageId, Map<String, String>>> messages = redissonClient.getStream().readGroup(
                                 "gofish",
