@@ -15,7 +15,7 @@ public class DriverManager {
 
         if (msgs.length > 3) {
             String[] errorMessages = Arrays.copyOfRange(msgs, 2, msgs.length);
-            errorMessage = String.join(delimiter: ":", errorMessages);
+            errorMessage = String.join(":", errorMessages);
         }
 
         try {
@@ -58,7 +58,7 @@ public class DriverManager {
                     RStream<byte[], byte[]> stream = redissonClient.getStream(REDIS_TASK_STREAM, ByteArrayCodec.INSTANCE);
                     stream.createGroup("gofish", StreamMessageId.NEWEST);
                 } catch (Exception e) {
-                    log.warn("Redis stream consumer group already exist");
+                    log.warn("Failed to create consumer group, it may already exist: {}", e.getMessage());
                 }
 
                 // Subscribe to Redis Stream using consumer group
@@ -69,35 +69,30 @@ public class DriverManager {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         // Read messages from stream with consumer group (current Redisson API)
-                        StreamMultiReadGroupArgs args = StreamMultiReadGroupArgs.StreamIds(
-                                Collections.singletonMap(REDIS_ENGINE_CHANNEL, StreamMessageId.NEVER_DELIVERED))
+                        StreamReadGroupArgs args = StreamReadGroupArgs.greaterThan(StreamMessageId.NEVER_DELIVERED)
                                 .count(5)
                                 .timeout(Duration.ofSeconds(5));
 
-                        Map<String, Map<StreamMessageId, Map<String, String>>> messages = redissonClient.getStream().readGroup(
+                        Map<StreamMessageId, Map<String, String>> messages = engineStream.readGroup(
                                 "gofish",
                                 consumerName,
                                 args
                         );
 
                         if (messages != null && !messages.isEmpty()) {
-                            // New API returns Map<String, Map<StreamMessageId, Map<String, String>>>
-                            for (Map.Entry<String, Map<StreamMessageId, Map<String, String>>> streamEntry : messages.entrySet()) {
-                                Map<StreamMessageId, Map<String, String>> streamMessages = streamEntry.getValue();
+                            // Single stream API returns Map<StreamMessageId, Map<String, String>>
+                            for (Map.Entry<StreamMessageId, Map<String, String>> entry : messages.entrySet()) {
+                                StreamMessageId messageId = entry.getKey();
+                                Map<String, String> messageData = entry.getValue();
 
-                                for (Map.Entry<StreamMessageId, Map<String, String>> entry : streamMessages.entrySet()) {
-                                    StreamMessageId messageId = entry.getKey();
-                                    Map<String, String> messageData = entry.getValue();
+                                // Extract message content from stream
+                                String messageContent = messageData.get("message");
+                                if (messageContent != null) {
+                                    // Process message directly without MessageListener
+                                    processMessage(messageContent);
 
-                                    // Extract message content from stream
-                                    String messageContent = messageData.get("message");
-                                    if (messageContent != null) {
-                                        // Process message directly without MessageListener
-                                        processMessage(messageContent);
-
-                                        // Acknowledge the message
-                                        engineStream.ack("gofish", messageId);
-                                    }
+                                    // Acknowledge the message
+                                    engineStream.ack("gofish", messageId);
                                 }
                             }
                         }
@@ -112,11 +107,6 @@ public class DriverManager {
                         Thread.sleep(1000); // Wait before retry
                     }
                 }
-
-                reconnectBackoff = createReconnectBackoff(originalGridProperties);
-            } catch (Exception e) {
-                log.warn("failed to subscribe", e);
-                reconnectBackoff.backoff();
             }
         });
     }
