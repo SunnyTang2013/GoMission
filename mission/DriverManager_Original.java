@@ -3,7 +3,7 @@ public class DriverManager {
     private static void processMessage(String messageStr) {
         String errorMessage = "";
         Map<String, String> carrier = null;
-        String[] msgs = messageStr.split(regex, ":");
+        String[] msgs = messageStr.split(":");
         String invocationHandlerKey = getTaskKey(msgs[0], msgs[1]);
 
         // TODO this will be removed in the future
@@ -14,16 +14,16 @@ public class DriverManager {
         }
 
         if (msgs.length > 3) {
-            String[] errorMessages = Arrays.copyOfRange(msgs, from: 2, msgs.length);
+            String[] errorMessages = Arrays.copyOfRange(msgs, 2, msgs.length);
             errorMessage = String.join(delimiter: ":", errorMessages);
         }
 
         try {
             Context context = createContext(carrier);
             try (Scope scope = context.makeCurrent()) {
-                Span span = getTracer().spanBuilder(§"DriverManager.onMessage")
-                        .setAttribute(§"serviceGroupId", msgs[0])
-                        .setAttribute(§"taskId", msgs[1])
+                Span span = getTracer().spanBuilder("DriverManager.onMessage")
+                        .setAttribute("serviceGroupId", msgs[0])
+                        .setAttribute("taskId", msgs[1])
                         .startSpan();
                 try (Scope ignored = span.makeCurrent()) {
                     ServiceInvocationHandler handler = serviceTaskMap.get(invocationHandlerKey);
@@ -69,12 +69,15 @@ public class DriverManager {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
                         // Read messages from stream with consumer group (current Redisson API)
-                        Map<String, Map<StreamMessageId, Map<String, String>>> messages = engineStream.readGroup(
+                        StreamMultiReadGroupArgs args = new StreamMultiReadGroupArgs();
+                        args.count(5);
+                        args.timeout(Duration.ofSeconds(5));
+                        args.stream(REDIS_ENGINE_CHANNEL, StreamMessageId.NEVER_DELIVERED);
+
+                        Map<String, Map<StreamMessageId, Map<String, String>>> messages = redissonClient.getStream().readGroup(
                                 "gofish",
                                 consumerName,
-                                StreamMultiReadGroupArgs.greaterThan(StreamMessageId.NEVER_DELIVERED)
-                                        .count(5)
-                                        .timeout(Duration.ofSeconds(5))
+                                args
                         );
 
                         if (messages != null && !messages.isEmpty()) {
